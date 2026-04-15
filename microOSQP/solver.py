@@ -1,6 +1,7 @@
 import numpy as np
 import scipy.sparse as spa
 import scipy.sparse.linalg as spla
+
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 
@@ -9,37 +10,37 @@ from typing import List, Optional, Dict, Any
 class OSQPSettings:
     rho: float = 1.0
     sigma: float = 1e-6
-    alpha: float = 1.6                # 1 < alpha < 2
+    alpha: float = 1.6  # 1 < alpha < 2
     max_iter: int = 10000
     eps_abs: float = 1e-12
-    eps_rel: float = 1e-4             # not used), for future extension
+    eps_rel: float = 1e-4  # not used), for future extension
     verbose: bool = False
-    log_every: int = 1               
-    store_history: bool = True       
+    log_every: int = 1
+    store_history: bool = True
 
 
-class SimpleOSQP:
+class microOSQPSolver:
     """
     ADMM splitting for:
-        min    0.5 x^T P x + q^T x
-        s.t.  l <= A x <= u
-        
-        x : primal
-        z : auxiliary, z = A x (projected into C := [l, u])
-        y : dual
+
+    min 0.5 x^T P x + q^T x
+    s.t. l <= A x <= u
+
+    x : primal
+    z : auxiliary, z = A x (projected into C := [l, u])
+    y : dual
 
     Iteration structure matches OSQP (14)-(19):
-        (x~, gamma) from KKT solve
-        z~ recovery
-        over-relaxation: x_hat, z_hat
-        z := Pi_C(z_hat + rho^{-1} y)
-        y := y + rho (z_hat - z)
+    (x~, gamma) from KKT solve
+    z~ recovery
+    over-relaxation: x_hat, z_hat
+    z := Pi_C(z_hat + rho^{-1} y)
+    y := y + rho (z_hat - z)
     """
 
     def __init__(self, P, q, A, l, u, settings: Optional[OSQPSettings] = None):
         self.P = spa.csc_matrix(P)
         self.q = np.asarray(q, dtype=float).reshape(-1)
-
         self.A = spa.csc_matrix(A)
         self.l = np.asarray(l, dtype=float).reshape(-1)
         self.u = np.asarray(u, dtype=float).reshape(-1)
@@ -63,8 +64,8 @@ class SimpleOSQP:
     def setup(self) -> None:
         """
         Build and factorize the quasi-definite KKT matrix (direct method):
-            [ P + sigma I    A^T      ]
-            [ A             -rho^{-1}I]
+        [ P + sigma I A^T ]
+        [ A -rho^{-1}I]
         """
         rho = float(self.s.rho)
         sigma = float(self.s.sigma)
@@ -73,23 +74,20 @@ class SimpleOSQP:
         minus_rho_inv_I = -(1.0 / rho) * spa.eye(self.m, format="csc")
 
         KKT = spa.bmat(
-            [[P_sigma, self.A.T],
-             [self.A,   minus_rho_inv_I]],
+            [[P_sigma, self.A.T], [self.A, minus_rho_inv_I]],
             format="csc",
         )
-
         self._kkt_solver = spla.splu(KKT)
 
     def _project_C(self, z_in: np.ndarray) -> np.ndarray:
         """Projection onto C := [l, u]"""
         return np.clip(z_in, self.l, self.u)
 
-
-    def _residuals_inf(self) -> (float, float):
+    def _residuals_inf(self) -> tuple[float, float]:
         """
         residual definitions:
-            r_prim = A x - z
-            r_dual = P x + q + A^T y
+        r_prim = A x - z
+        r_dual = P x + q + A^T y
         measured in infinity norm
         """
         r_prim = self.A @ self.x - self.z
@@ -102,18 +100,18 @@ class SimpleOSQP:
         return 0.5 * float(self.x @ Px) + float(self.q @ self.x)
 
     # main solve
-
     def solve(self):
         """
         main iteration
+
         Returns:
-            x, z, y, info
+        x, z, y, info
 
         info includes:
-            status: "solved" or "max_iter"
-            iter:   number of iterations executed
-            prim_res_inf, dual_res_inf
-            history: list of per-iteration logs
+        status: "solved" or "max_iter"
+        iter: number of iterations executed
+        prim_res_inf, dual_res_inf
+        history: list of per-iteration logs
         """
         if self._kkt_solver is None:
             self.setup()
@@ -123,7 +121,7 @@ class SimpleOSQP:
         alpha = float(self.s.alpha)
 
         if self.s.verbose:
-            print(" k        ||r_p||_inf      ||r_d||_inf          obj")
+            print(" k ||r_p||_inf ||r_d||_inf obj")
 
         status = "max_iter"
         k_final = self.s.max_iter - 1
@@ -131,19 +129,16 @@ class SimpleOSQP:
         for k in range(self.s.max_iter):
             # --- (1) KKT solve for (x_tilde, gamma) ---
             # RHS:
-            #   [ sigma x^k - q ]
-            #   [ z^k - rho^{-1} y^k ]
-            rhs = np.concatenate([
-                sigma * self.x - self.q,
-                self.z - (1.0 / rho) * self.y
-            ])
-
+            # [ sigma x^k - q ]
+            # [ z^k - rho^{-1} y^k ]
+            rhs = np.concatenate([sigma * self.x - self.q, self.z - (1.0 / rho) * self.y])
             sol = self._kkt_solver.solve(rhs)
-            x_tilde = sol[:self.n]
-            gamma = sol[self.n:]  # multiplier of A x_tilde = z_tilde
+
+            x_tilde = sol[: self.n]
+            gamma = sol[self.n :]  # multiplier of A x_tilde = z_tilde
 
             # Recover z_tilde:
-            #   z_tilde = z^k + rho^{-1} (gamma - y^k)
+            # z_tilde = z^k + rho^{-1} (gamma - y^k)
             z_tilde = self.z + (1.0 / rho) * (gamma - self.y)
 
             # --- (2) over-relaxation ---
@@ -151,9 +146,8 @@ class SimpleOSQP:
             z_hat = alpha * z_tilde + (1.0 - alpha) * self.z
 
             # --- (3) primal updates ---
-            # x^{k+1} = x_hat  (w term omitted; in OSQP paper it stays zero)
+            # x^{k+1} = x_hat (w term omitted; in OSQP paper it stays zero)
             self.x = x_hat
-
             # z^{k+1} = Pi_C(z_hat + rho^{-1} y^k)
             self.z = self._project_C(z_hat + (1.0 / rho) * self.y)
 
@@ -165,15 +159,17 @@ class SimpleOSQP:
             obj = self._objective()
 
             if self.s.store_history:
-                self.history.append({
-                    "k": k,
-                    "prim_res_inf": prim_res,
-                    "dual_res_inf": dual_res,
-                    "obj": obj,
-                })
+                self.history.append(
+                    {
+                        "k": k,
+                        "prim_res_inf": prim_res,
+                        "dual_res_inf": dual_res,
+                        "obj": obj,
+                    }
+                )
 
             if self.s.verbose and (k % max(1, self.s.log_every) == 0):
-                print(f"{k:4d}   {prim_res:14.6e}  {dual_res:14.6e}  {obj:14.6e}")
+                print(f"{k:4d} {prim_res:14.6e} {dual_res:14.6e} {obj:14.6e}")
 
             if prim_res < self.s.eps_abs and dual_res < self.s.eps_abs:
                 status = "solved"
