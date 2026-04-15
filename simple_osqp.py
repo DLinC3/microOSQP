@@ -20,14 +20,13 @@ class OSQPSettings:
 
 class SimpleOSQP:
     """
-    Minimal OSQP-style ADMM splitting for:
-        minimize    0.5 x^T P x + q^T x
-        subject to  l <= A x <= u
-
-    Variables:
+    ADMM splitting for:
+        min    0.5 x^T P x + q^T x
+        s.t.  l <= A x <= u
+        
         x : primal
         z : auxiliary, z = A x (projected into C := [l, u])
-        y : dual (nu in your notes)
+        y : dual
 
     Iteration structure matches OSQP (14)-(19):
         (x~, gamma) from KKT solve
@@ -63,7 +62,7 @@ class SimpleOSQP:
 
     def setup(self) -> None:
         """
-        Build and factorize the (quasi-definite) KKT matrix (direct method):
+        Build and factorize the quasi-definite KKT matrix (direct method):
             [ P + sigma I    A^T      ]
             [ A             -rho^{-1}I]
         """
@@ -82,16 +81,16 @@ class SimpleOSQP:
         self._kkt_solver = spla.splu(KKT)
 
     def _project_C(self, z_in: np.ndarray) -> np.ndarray:
-        """Projection onto C = { z | l <= z <= u }."""
+        """Projection onto C := [l, u]"""
         return np.clip(z_in, self.l, self.u)
 
 
     def _residuals_inf(self) -> (float, float):
         """
-        Keep your residual definitions:
+        residual definitions:
             r_prim = A x - z
             r_dual = P x + q + A^T y
-        (Both measured in infinity norm.)
+        measured in infinity norm
         """
         r_prim = self.A @ self.x - self.z
         r_dual = self.P @ self.x + self.q + self.A.T @ self.y
@@ -106,6 +105,7 @@ class SimpleOSQP:
 
     def solve(self):
         """
+        main iteration
         Returns:
             x, z, y, info
 
@@ -113,7 +113,7 @@ class SimpleOSQP:
             status: "solved" or "max_iter"
             iter:   number of iterations executed
             prim_res_inf, dual_res_inf
-            history: list of per-iteration logs (if store_history=True)
+            history: list of per-iteration logs
         """
         if self._kkt_solver is None:
             self.setup()
